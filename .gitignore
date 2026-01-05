@@ -1,0 +1,13 @@
+# OS files
+.DS_Store
+
+# Editor folders
+.vscode/
+.idea/
+
+# Env files
+.env
+.env.local
+
+# Node modules (as fallback)
+node_modules/
