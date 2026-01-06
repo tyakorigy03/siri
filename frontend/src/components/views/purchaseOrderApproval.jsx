@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BiSearch, BiRefresh, BiCopy } from 'react-icons/bi';
 import { FiFilter } from 'react-icons/fi';
 import { FaPrint } from 'react-icons/fa6';
 import { LuSquareArrowDownRight } from 'react-icons/lu';
-import { MdCheckCircle, MdClose, MdEdit } from 'react-icons/md';
+import { MdCheckCircle, MdClose, MdEdit, MdAdd } from 'react-icons/md';
 import { FaEye } from 'react-icons/fa';
+import { getPurchaseOrders, approvePurchaseOrder, rejectPurchaseOrder, getPurchaseOrder } from '../../services/purchases';
+import { showSuccess, showError } from '../../utils/toast';
 
 export default function PurchaseOrderApproval() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('pending');
   const [expandedRows, setExpandedRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -14,6 +18,9 @@ export default function PurchaseOrderApproval() {
   const [approvalNotes, setApprovalNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [filters, setFilters] = useState({
     supplier: '',
     startDate: '',
@@ -24,115 +31,123 @@ export default function PurchaseOrderApproval() {
     priority: ''
   });
 
-  // Mock data
-  const pendingPOs = [
-    {
-      id: 1,
-      code: 'PO-001',
-      supplier: 'Tech Distributors Ltd',
-      items: [
-        { name: 'USB Cables', quantity: 100, unitPrice: 2500, total: 250000 },
-        { name: 'HDMI Cables', quantity: 50, unitPrice: 3000, total: 150000 }
-      ],
-      subtotal: 400000,
-      vat: 72000,
-      totalAmount: 472000,
-      requestedBy: 'Sarah Williams',
-      requestDate: '05/01/2026',
-      requiredDate: '10/01/2026',
-      status: 'pending',
-      priority: 'high',
-      justification: 'Stock below reorder point, needed for upcoming sales',
-      deliveryAddress: 'Downtown Store Warehouse'
-    },
-    {
-      id: 2,
-      code: 'PO-002',
-      supplier: 'Office Solutions Inc',
-      items: [
-        { name: 'Printer Paper A4', quantity: 200, unitPrice: 1500, total: 300000 },
-        { name: 'Toner Cartridges', quantity: 10, unitPrice: 15000, total: 150000 }
-      ],
-      subtotal: 450000,
-      vat: 81000,
-      totalAmount: 531000,
-      requestedBy: 'Mike Johnson',
-      requestDate: '04/01/2026',
-      requiredDate: '08/01/2026',
-      status: 'pending',
-      priority: 'medium',
-      justification: 'Monthly office supplies replenishment',
-      deliveryAddress: 'Main Office'
-    },
-    {
-      id: 3,
-      code: 'PO-003',
-      supplier: 'Electronics Warehouse',
-      items: [
-        { name: 'Laptop Dell XPS 15', quantity: 5, unitPrice: 1200000, total: 6000000 },
-        { name: 'Laptop Bags', quantity: 5, unitPrice: 25000, total: 125000 }
-      ],
-      subtotal: 6125000,
-      vat: 1102500,
-      totalAmount: 7227500,
-      requestedBy: 'David Brown',
-      requestDate: '03/01/2026',
-      requiredDate: '15/01/2026',
-      status: 'pending',
-      priority: 'high',
-      justification: 'New employee onboarding - urgent requirement',
-      deliveryAddress: 'Downtown Store'
-    }
-  ];
+  // Fetch purchase orders from API
+  useEffect(() => {
+    fetchPurchaseOrders();
+  }, []); // Load all at once
 
-  const approvedPOs = [
-    {
-      id: 4,
-      code: 'PO-004',
-      supplier: 'Stationery Plus',
-      items: [
-        { name: 'Notebooks', quantity: 100, unitPrice: 1000, total: 100000 }
-      ],
-      subtotal: 100000,
-      vat: 18000,
-      totalAmount: 118000,
-      requestedBy: 'Emma Davis',
-      requestDate: '02/01/2026',
-      approvedDate: '03/01/2026',
-      approvedBy: 'Jane Smith',
-      status: 'approved',
-      justification: 'Training materials for new staff'
+  useEffect(() => {
+    if (filters.startDate || filters.endDate || filters.supplier) {
+      fetchPurchaseOrders();
     }
-  ];
+  }, [filters.startDate, filters.endDate, filters.supplier]);
 
-  const rejectedPOs = [
-    {
-      id: 5,
-      code: 'PO-005',
-      supplier: 'Luxury Furniture Co',
-      items: [
-        { name: 'Executive Desk', quantity: 3, unitPrice: 500000, total: 1500000 }
-      ],
-      subtotal: 1500000,
-      vat: 270000,
-      totalAmount: 1770000,
-      requestedBy: 'John Doe',
-      requestDate: '01/01/2026',
-      rejectedDate: '02/01/2026',
-      rejectedBy: 'Jane Smith',
-      rejectionReason: 'Over budget - not approved in current quarter plan',
-      status: 'rejected',
-      justification: 'Office upgrade'
+  const fetchPurchaseOrders = async () => {
+    try {
+      setLoading(true);
+      const queryParams = {
+        page: 1,
+        limit: 1000, // Get all orders
+        ...(filters.supplier && { supplier_id: filters.supplier })
+      };
+
+      const response = await getPurchaseOrders(queryParams);
+      let ordersData = [];
+      if (Array.isArray(response)) {
+        ordersData = response;
+      } else if (response.data && Array.isArray(response.data)) {
+        ordersData = response.data;
+      } else if (response.items && Array.isArray(response.items)) {
+        ordersData = response.items;
+      }
+
+      // Fetch full details for each order to get items
+      const ordersWithItems = await Promise.all(
+        ordersData.map(async (po) => {
+          try {
+            const fullOrder = await getPurchaseOrder(po.id);
+            return {
+              id: po.id,
+              code: po.order_number || po.id,
+              supplier: po.supplier_name || 'Unknown',
+              items: fullOrder.data?.items || fullOrder.items || [],
+              subtotal: parseFloat(po.total_amount) || 0,
+              vat: (parseFloat(po.total_amount) || 0) * 0.18, // 18% VAT
+              totalAmount: (parseFloat(po.total_amount) || 0) * 1.18,
+              requestedBy: po.created_by_name || 'Unknown',
+              requestDate: new Date(po.order_date || po.created_at).toLocaleDateString('en-GB'),
+              requiredDate: po.expected_date ? new Date(po.expected_date).toLocaleDateString('en-GB') : null,
+              status: po.status?.toLowerCase() === 'draft' || po.status?.toLowerCase() === 'pending' ? 'pending' :
+                      po.status?.toLowerCase() === 'approved' ? 'approved' :
+                      po.status?.toLowerCase() === 'cancelled' ? 'rejected' :
+                      po.status?.toLowerCase() || 'pending',
+              priority: 'medium', // Default, can be added to backend
+              justification: po.notes || '',
+              deliveryAddress: po.warehouse_name || '',
+              approvedBy: po.approved_by_name,
+              approvedDate: po.approved_by ? new Date(po.updated_at || po.created_at).toLocaleDateString('en-GB') : null,
+              rejectedBy: po.status?.toLowerCase() === 'cancelled' ? po.approved_by_name : null,
+              rejectedDate: po.status?.toLowerCase() === 'cancelled' ? new Date(po.updated_at || po.created_at).toLocaleDateString('en-GB') : null,
+              rejectionReason: po.notes?.includes('[REJECTED]') 
+                ? po.notes.split('[REJECTED] Reason:')[1]?.trim() || 'No reason provided'
+                : null
+            };
+          } catch (error) {
+            console.error(`Error fetching order ${po.id}:`, error);
+            // Return basic order without items if fetch fails
+            return {
+              id: po.id,
+              code: po.order_number || po.id,
+              supplier: po.supplier_name || 'Unknown',
+              items: [],
+              subtotal: parseFloat(po.total_amount) || 0,
+              vat: (parseFloat(po.total_amount) || 0) * 0.18,
+              totalAmount: (parseFloat(po.total_amount) || 0) * 1.18,
+              requestedBy: po.created_by_name || 'Unknown',
+              requestDate: new Date(po.order_date || po.created_at).toLocaleDateString('en-GB'),
+              requiredDate: po.expected_date ? new Date(po.expected_date).toLocaleDateString('en-GB') : null,
+              status: po.status?.toLowerCase() === 'draft' || po.status?.toLowerCase() === 'pending' ? 'pending' :
+                      po.status?.toLowerCase() === 'approved' ? 'approved' :
+                      po.status?.toLowerCase() === 'cancelled' ? 'rejected' :
+                      po.status?.toLowerCase() || 'pending',
+              priority: 'medium',
+              justification: po.notes || '',
+              deliveryAddress: po.warehouse_name || ''
+            };
+          }
+        })
+      );
+
+      setPurchaseOrders(ordersWithItems);
+      
+      // Extract unique suppliers
+      const uniqueSuppliers = [...new Set(ordersWithItems.map(po => po.supplier))];
+      setSuppliers(uniqueSuppliers);
+    } catch (error) {
+      console.error('Error fetching purchase orders:', error);
+      showError(error.message || 'Failed to fetch purchase orders');
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
 
-  const allPOs = [...pendingPOs, ...approvedPOs, ...rejectedPOs];
+  // Filter purchase orders based on active tab
+  const getFilteredPOs = () => {
+    let filtered = purchaseOrders;
+    
+    if (activeTab === 'pending') {
+      filtered = purchaseOrders.filter(po => po.status === 'pending');
+    } else if (activeTab === 'approved') {
+      filtered = purchaseOrders.filter(po => po.status === 'approved');
+    } else if (activeTab === 'rejected') {
+      filtered = purchaseOrders.filter(po => po.status === 'rejected');
+    }
+    
+    return filtered;
+  };
 
   const getCurrentPOs = () => {
-    let pos = activeTab === 'pending' ? pendingPOs :
-              activeTab === 'approved' ? approvedPOs :
-              activeTab === 'rejected' ? rejectedPOs :
-              allPOs;
+    let pos = getFilteredPOs();
     
     if (searchQuery) {
       pos = pos.filter(po =>
@@ -197,14 +212,29 @@ export default function PurchaseOrderApproval() {
   };
 
   const confirmAction = async () => {
+    if (showApprovalModal.action === 'reject' && !approvalNotes.trim()) {
+      showError('Rejection reason is required');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert(`Purchase Order ${showApprovalModal.action}d successfully!`);
+      const { po } = showApprovalModal;
+      
+      if (showApprovalModal.action === 'approve') {
+        await approvePurchaseOrder(po.id);
+        showSuccess('Purchase order approved successfully');
+      } else if (showApprovalModal.action === 'reject') {
+        await rejectPurchaseOrder(po.id, approvalNotes);
+        showSuccess('Purchase order rejected successfully');
+      }
+      
       setShowApprovalModal(null);
       setApprovalNotes('');
+      await fetchPurchaseOrders(); // Refresh the list
     } catch (error) {
-      alert('Error: ' + error.message);
+      console.error('Error processing purchase order:', error);
+      showError(error.message || `Failed to ${showApprovalModal.action} purchase order`);
     } finally {
       setIsSubmitting(false);
     }
@@ -227,7 +257,6 @@ export default function PurchaseOrderApproval() {
   };
 
   const hasActiveFilters = Object.values(filters).some(v => v !== '');
-  const suppliers = [...new Set(allPOs.map(po => po.supplier))];
   const priorities = ['high', 'medium', 'low'];
 
   const ExpandedRowDetails = ({ po }) => (
@@ -292,10 +321,10 @@ export default function PurchaseOrderApproval() {
               <tbody>
                 {po.items.map((item, idx) => (
                   <tr key={idx} className='border-b border-gray-200'>
-                    <td className='py-1 px-2 font-semibold'>{item.name}</td>
+                    <td className='py-1 px-2 font-semibold'>{item.product_name || item.name || 'Unknown Product'}</td>
                     <td className='text-center py-1 px-2'>{item.quantity}</td>
-                    <td className='text-right py-1 px-2'>{formatCurrency(item.unitPrice)}</td>
-                    <td className='text-right py-1 px-2 font-semibold'>{formatCurrency(item.total)}</td>
+                    <td className='text-right py-1 px-2'>{formatCurrency(item.unit_cost || item.unitPrice || 0)}</td>
+                    <td className='text-right py-1 px-2 font-semibold'>{formatCurrency(item.line_total || item.total || 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -363,7 +392,7 @@ export default function PurchaseOrderApproval() {
                 <p className='text-xs text-gray-600 mb-1'>Items:</p>
                 <ul className='text-xs space-y-1'>
                   {po.items.map((item, idx) => (
-                    <li key={idx}>• {item.name} (x{item.quantity}) - {formatCurrency(item.total)}</li>
+                    <li key={idx}>• {item.product_name || item.name || 'Unknown'} (x{item.quantity}) - {formatCurrency(item.line_total || item.total || 0)}</li>
                   ))}
                 </ul>
               </div>
@@ -415,14 +444,20 @@ export default function PurchaseOrderApproval() {
       <div className='flex justify-between items-center'>
         <h2 className='font-bold text-3xl'>Purchase Order Approval</h2>
         <div className='flex items-center gap-2'>
+          <button
+            onClick={() => navigate('/dashboard/manager/create-purchase-order')}
+            className='px-3 py-1 rounded text-xs font-semibold uppercase bg-blue-500 text-white hover:bg-blue-600 flex items-center gap-1'
+          >
+            <MdAdd size={16} /> Create PO
+          </button>
           <button onClick={() => setActiveTab('pending')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'pending' ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Pending ({pendingPOs.length})
+            Pending ({purchaseOrders.filter(po => po.status === 'pending').length})
           </button>
           <button onClick={() => setActiveTab('approved')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'approved' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Approved ({approvedPOs.length})
+            Approved ({purchaseOrders.filter(po => po.status === 'approved').length})
           </button>
           <button onClick={() => setActiveTab('rejected')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'rejected' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Rejected ({rejectedPOs.length})
+            Rejected ({purchaseOrders.filter(po => po.status === 'rejected').length})
           </button>
           <div className='relative flex items-center'>
             <input type='text' placeholder='Search here ...' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className='border border-gray-400 rounded-0 focus:border-blue-500 focus:outline-0 text-gray-500 py-[1.5px] pl-3 pr-5 relative left-[15px] text-xs' />
@@ -444,8 +479,12 @@ export default function PurchaseOrderApproval() {
               </span>
             )}
           </button>
-          <button className='border text-gray-500 hover:bg-gray-500 hover:text-gray-50 text-xs flex items-center space-x-1 py-1 px-3'>
-            <BiRefresh/> Refresh
+          <button 
+            onClick={fetchPurchaseOrders}
+            disabled={loading}
+            className='border text-gray-500 hover:bg-gray-500 hover:text-gray-50 text-xs flex items-center space-x-1 py-1 px-3 disabled:opacity-50'
+          >
+            <BiRefresh/> {loading ? 'Loading...' : 'Refresh'}
           </button>
         </div>
         <div className='flex space-x-2'>
@@ -540,7 +579,13 @@ export default function PurchaseOrderApproval() {
             </tr>
           </thead>
           <tbody>
-            {pos.length === 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan='11' className='text-center py-12'>
+                  <p className='text-gray-600 font-semibold'>Loading purchase orders...</p>
+                </td>
+              </tr>
+            ) : pos.length === 0 ? (
               <tr>
                 <td colSpan='11' className='text-center py-12'>
                   <p className='text-gray-600 font-semibold'>No purchase orders found</p>

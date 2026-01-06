@@ -1,11 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BiSearch, BiRefresh, BiCopy } from 'react-icons/bi';
 import { FiFilter } from 'react-icons/fi';
 import { FaPrint } from 'react-icons/fa6';
 import { LuSquareArrowDownRight } from 'react-icons/lu';
-import { MdCheckCircle, MdClose, MdAttachFile } from 'react-icons/md';
+import { MdCheckCircle, MdClose, MdAttachFile, MdAdd } from 'react-icons/md';
+import { getExpenses, approveExpense, rejectExpense } from '../../services/expenses';
+import { showSuccess, showError } from '../../utils/toast';
 
 export default function ExpenseApproval() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('pending');
   const [expandedRows, setExpandedRows] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -13,6 +17,9 @@ export default function ExpenseApproval() {
   const [approvalNotes, setApprovalNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [expenses, setExpenses] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [filters, setFilters] = useState({
     category: '',
     startDate: '',
@@ -24,164 +31,137 @@ export default function ExpenseApproval() {
     hasReceipt: ''
   });
 
-  // Mock data
-  const pendingExpenses = [
-    {
-      id: 1,
-      code: 'EXP-001',
-      category: 'Utilities',
-      payee: 'EUCL',
-      amount: 150000,
-      vat: 27000,
-      totalAmount: 177000,
-      paymentMethod: 'Bank Transfer',
-      requestedBy: 'David Brown',
-      requestDate: '05/01/2026',
-      dueDate: '10/01/2026',
-      status: 'pending',
-      hasReceipt: true,
-      description: 'Electricity bill for December 2025',
-      priority: 'high'
-    },
-    {
-      id: 2,
-      code: 'EXP-002',
-      category: 'Office Supplies',
-      payee: 'Office Mart',
-      amount: 45000,
-      vat: 8100,
-      totalAmount: 53100,
-      paymentMethod: 'Cash',
-      requestedBy: 'Sarah Williams',
-      requestDate: '05/01/2026',
-      dueDate: '06/01/2026',
-      status: 'pending',
-      hasReceipt: true,
-      description: 'Printer paper, pens, folders',
-      priority: 'medium'
-    },
-    {
-      id: 3,
-      code: 'EXP-003',
-      category: 'Fuel',
-      payee: 'Total Station',
-      amount: 80000,
-      vat: 14400,
-      totalAmount: 94400,
-      paymentMethod: 'Company Card',
-      requestedBy: 'James Wilson',
-      requestDate: '04/01/2026',
-      dueDate: '05/01/2026',
-      status: 'pending',
-      hasReceipt: false,
-      description: 'Fuel for delivery vehicles',
-      priority: 'high'
-    },
-    {
-      id: 4,
-      code: 'EXP-004',
-      category: 'Maintenance',
-      payee: 'Fix-It Services',
-      amount: 120000,
-      vat: 21600,
-      totalAmount: 141600,
-      paymentMethod: 'Bank Transfer',
-      requestedBy: 'Mike Johnson',
-      requestDate: '03/01/2026',
-      dueDate: '08/01/2026',
-      status: 'pending',
-      hasReceipt: true,
-      description: 'AC repair and maintenance',
-      priority: 'low'
-    }
-  ];
+  // Fetch expenses from API - load all at once to avoid unnecessary requests
+  useEffect(() => {
+    fetchExpenses();
+  }, []); // Only fetch once on mount
 
-  const approvedExpenses = [
-    {
-      id: 5,
-      code: 'EXP-005',
-      category: 'Marketing',
-      payee: 'Print Hub',
-      amount: 200000,
-      vat: 36000,
-      totalAmount: 236000,
-      paymentMethod: 'Bank Transfer',
-      requestedBy: 'Emma Davis',
-      requestDate: '02/01/2026',
-      approvedDate: '03/01/2026',
-      approvedBy: 'Jane Smith',
-      status: 'approved',
-      hasReceipt: true,
-      description: 'Business cards and flyers'
+  // Refetch when filters change (but not when tab changes - we filter client-side)
+  useEffect(() => {
+    if (filters.startDate || filters.endDate || filters.category) {
+      fetchExpenses();
     }
-  ];
+  }, [filters.startDate, filters.endDate, filters.category]);
 
-  const rejectedExpenses = [
-    {
-      id: 6,
-      code: 'EXP-006',
-      category: 'Entertainment',
-      payee: 'Restaurant XYZ',
-      amount: 85000,
-      vat: 15300,
-      totalAmount: 100300,
-      paymentMethod: 'Cash',
-      requestedBy: 'John Doe',
-      requestDate: '01/01/2026',
-      rejectedDate: '02/01/2026',
-      rejectedBy: 'Jane Smith',
-      rejectionReason: 'Not business related',
-      status: 'rejected',
-      hasReceipt: true,
-      description: 'Team lunch'
+  const fetchExpenses = async () => {
+    try {
+      setLoading(true);
+      
+      // Load all expenses without status filter - we'll filter on frontend
+      const queryParams = {
+        page: 1,
+        limit: 1000, // Get all expenses
+        ...(filters.startDate && { date_from: filters.startDate }),
+        ...(filters.endDate && { date_to: filters.endDate }),
+        ...(filters.category && { category_id: filters.category })
+      };
+
+      const response = await getExpenses(queryParams);
+      // Handle different response structures
+      let expensesData = [];
+      if (Array.isArray(response)) {
+        expensesData = response;
+      } else if (response.data && Array.isArray(response.data)) {
+        expensesData = response.data;
+      } else if (response.items && Array.isArray(response.items)) {
+        expensesData = response.items;
+      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
+        expensesData = response.data.data;
+      }
+      
+      // Transform backend data to frontend format
+      const transformedExpenses = expensesData.map(exp => ({
+        id: exp.id,
+        code: exp.id,
+        category: exp.category_name || exp.category_name || 'Uncategorized',
+        payee: exp.payee,
+        amount: parseFloat(exp.amount) || 0,
+        vat: parseFloat(exp.vat_amount) || 0,
+        totalAmount: (parseFloat(exp.amount) || 0) + (parseFloat(exp.vat_amount) || 0),
+        paymentMethod: exp.payment_method?.replace('_', ' ') || exp.payment_method || 'Unknown',
+        requestedBy: exp.requested_by_name || 'Unknown',
+        requestDate: new Date(exp.expense_date || exp.created_at).toLocaleDateString('en-GB'),
+        dueDate: new Date(exp.expense_date || exp.created_at).toLocaleDateString('en-GB'),
+        status: exp.display_status?.toLowerCase() || 
+                (exp.status === 'PAID' ? 'paid' : 
+                 exp.status === 'APPROVED' ? 'approved' : 
+                 exp.status === 'DRAFT' ? 'pending' : 
+                 exp.status?.toLowerCase() || 'pending'),
+        hasReceipt: false, // Receipt URL field needs to be added to database schema
+        receiptUrl: null,
+        description: exp.description || '',
+        priority: 'medium', // Default priority, can be added to backend later
+        approvedBy: exp.approved_by_name,
+        approvedDate: exp.approved_by ? new Date(exp.created_at).toLocaleDateString('en-GB') : null,
+        rejectedBy: exp.display_status === 'REJECTED' ? exp.approved_by_name : null,
+        rejectedDate: exp.display_status === 'REJECTED' ? new Date(exp.created_at).toLocaleDateString('en-GB') : null,
+        rejectionReason: exp.description?.includes('[REJECTED]') 
+          ? exp.description.split('[REJECTED] Reason:')[1]?.trim() || 'No reason provided'
+          : null
+      }));
+
+      setExpenses(transformedExpenses);
+      
+      // Extract unique categories
+      const uniqueCategories = [...new Set(transformedExpenses.map(e => e.category))];
+      setCategories(uniqueCategories);
+    } catch (error) {
+      console.error('Error fetching expenses:', error);
+      showError(error.message || 'Failed to fetch expenses');
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
 
-  const allExpenses = [...pendingExpenses, ...approvedExpenses, ...rejectedExpenses];
+  // Filter expenses based on active tab
+  const getFilteredExpenses = () => {
+    let filtered = expenses;
+    
+    if (activeTab === 'pending') {
+      filtered = expenses.filter(e => e.status === 'pending');
+    } else if (activeTab === 'approved') {
+      filtered = expenses.filter(e => e.status === 'approved');
+    } else if (activeTab === 'rejected') {
+      filtered = expenses.filter(e => e.status === 'rejected');
+    } else if (activeTab === 'paid') {
+      filtered = expenses.filter(e => e.status === 'paid');
+    }
+    // 'all' tab shows all expenses
+    
+    return filtered;
+  };
 
   const getCurrentExpenses = () => {
-    let expenses = activeTab === 'pending' ? pendingExpenses :
-                   activeTab === 'approved' ? approvedExpenses :
-                   activeTab === 'rejected' ? rejectedExpenses :
-                   allExpenses;
+    let filtered = getFilteredExpenses();
     
     // Apply search
     if (searchQuery) {
-      expenses = expenses.filter(e =>
+      filtered = filtered.filter(e =>
         e.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
         e.payee.toLowerCase().includes(searchQuery.toLowerCase()) ||
         e.category.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
-    // Apply filters
-    if (filters.category) {
-      expenses = expenses.filter(e => e.category === filters.category);
-    }
+    // Apply additional filters
     if (filters.payee) {
-      expenses = expenses.filter(e => e.payee.toLowerCase().includes(filters.payee.toLowerCase()));
+      filtered = filtered.filter(e => e.payee.toLowerCase().includes(filters.payee.toLowerCase()));
     }
     if (filters.priority) {
-      expenses = expenses.filter(e => e.priority === filters.priority);
+      filtered = filtered.filter(e => e.priority === filters.priority);
     }
     if (filters.hasReceipt !== '') {
       const hasReceipt = filters.hasReceipt === 'yes';
-      expenses = expenses.filter(e => e.hasReceipt === hasReceipt);
-    }
-    if (filters.startDate) {
-      expenses = expenses.filter(e => new Date(e.requestDate.split('/').reverse().join('-')) >= new Date(filters.startDate));
-    }
-    if (filters.endDate) {
-      expenses = expenses.filter(e => new Date(e.requestDate.split('/').reverse().join('-')) <= new Date(filters.endDate));
+      filtered = filtered.filter(e => e.hasReceipt === hasReceipt);
     }
     if (filters.minAmount) {
-      expenses = expenses.filter(e => e.totalAmount >= parseFloat(filters.minAmount));
+      filtered = filtered.filter(e => e.totalAmount >= parseFloat(filters.minAmount));
     }
     if (filters.maxAmount) {
-      expenses = expenses.filter(e => e.totalAmount <= parseFloat(filters.maxAmount));
+      filtered = filtered.filter(e => e.totalAmount <= parseFloat(filters.maxAmount));
     }
     
-    return expenses;
+    return filtered;
   };
 
   const handleFilterChange = (field, value) => {
@@ -206,8 +186,6 @@ export default function ExpenseApproval() {
 
   const hasActiveFilters = Object.values(filters).some(v => v !== '');
 
-  // Get unique categories for filter dropdown
-  const categories = [...new Set(allExpenses.map(e => e.category))];
   const priorities = ['high', 'medium', 'low'];
 
   const toggleRow = (id) => {
@@ -240,14 +218,29 @@ export default function ExpenseApproval() {
   };
 
   const confirmAction = async () => {
+    if (showApprovalModal.action === 'reject' && !approvalNotes.trim()) {
+      showError('Rejection reason is required');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert(`Expense ${showApprovalModal.action}d successfully!`);
+      const { expense } = showApprovalModal;
+      
+      if (showApprovalModal.action === 'approve') {
+        await approveExpense(expense.id, { notes: approvalNotes });
+        showSuccess('Expense approved successfully');
+      } else if (showApprovalModal.action === 'reject') {
+        await rejectExpense(expense.id, approvalNotes);
+        showSuccess('Expense rejected successfully');
+      }
+      
       setShowApprovalModal(null);
       setApprovalNotes('');
+      await fetchExpenses(); // Refresh the list
     } catch (error) {
-      alert('Error: ' + error.message);
+      console.error('Error processing expense:', error);
+      showError(error.message || `Failed to ${showApprovalModal.action} expense`);
     } finally {
       setIsSubmitting(false);
     }
@@ -272,6 +265,14 @@ export default function ExpenseApproval() {
                 <span className='text-gray-600'>Payment Method:</span>
                 <span className='font-semibold'>{expense.paymentMethod}</span>
               </div>
+              {expense.receiptUrl && (
+                <div className='flex justify-between'>
+                  <span className='text-gray-600'>Receipt:</span>
+                  <a href={expense.receiptUrl} target='_blank' rel='noopener noreferrer' className='text-blue-600 hover:underline'>
+                    View Receipt
+                  </a>
+                </div>
+              )}
               <div className='flex justify-between'>
                 <span className='text-gray-600'>Receipt:</span>
                 <span className='font-semibold flex items-center gap-1'>
@@ -292,10 +293,12 @@ export default function ExpenseApproval() {
                 <span className='text-gray-600'>Amount:</span>
                 <span className='font-semibold'>{formatCurrency(expense.amount)}</span>
               </div>
-              <div className='flex justify-between'>
-                <span className='text-gray-600'>VAT (18%):</span>
-                <span className='font-semibold'>{formatCurrency(expense.vat)}</span>
-              </div>
+              {expense.vat > 0 && (
+                <div className='flex justify-between'>
+                  <span className='text-gray-600'>VAT:</span>
+                  <span className='font-semibold'>{formatCurrency(expense.vat)}</span>
+                </div>
+              )}
               <div className='flex justify-between border-t border-gray-300 pt-2 mt-2'>
                 <span className='font-bold'>Total:</span>
                 <span className='font-bold text-lg'>{formatCurrency(expense.totalAmount)}</span>
@@ -327,10 +330,15 @@ export default function ExpenseApproval() {
 
         {expense.status === 'pending' && (
           <div className='flex gap-2 mt-3'>
-            {expense.hasReceipt && (
-              <button className='bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs font-semibold'>
+            {expense.receiptUrl && (
+              <a 
+                href={expense.receiptUrl} 
+                target='_blank' 
+                rel='noopener noreferrer'
+                className='bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs font-semibold'
+              >
                 View Receipt
-              </button>
+              </a>
             )}
             <button onClick={() => handleApprove(expense)} className='bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-xs font-semibold'>
               Approve
@@ -410,21 +418,33 @@ export default function ExpenseApproval() {
     );
   };
 
-  const expenses = getCurrentExpenses();
+  const displayExpenses = getCurrentExpenses();
 
   return (
     <div className='p-6 space-y-6 bg-gray-50 min-h-screen'>
       <div className='flex justify-between items-center'>
         <h2 className='font-bold text-3xl'>Expense Approval</h2>
         <div className='flex items-center gap-2'>
+          <button
+            onClick={() => navigate('/dashboard/manager/create-expense')}
+            className='px-3 py-1 rounded text-xs font-semibold uppercase bg-blue-500 text-white hover:bg-blue-600 flex items-center gap-1'
+          >
+            <MdAdd size={16} /> Create Expense
+          </button>
           <button onClick={() => setActiveTab('pending')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'pending' ? 'bg-orange-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Pending ({pendingExpenses.length})
+            Pending ({expenses.filter(e => e.status === 'pending').length})
           </button>
           <button onClick={() => setActiveTab('approved')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'approved' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Approved ({approvedExpenses.length})
+            Approved ({expenses.filter(e => e.status === 'approved').length})
           </button>
           <button onClick={() => setActiveTab('rejected')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'rejected' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
-            Rejected ({rejectedExpenses.length})
+            Rejected ({expenses.filter(e => e.status === 'rejected').length})
+          </button>
+          <button onClick={() => setActiveTab('paid')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'paid' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+            Paid ({expenses.filter(e => e.status === 'paid').length})
+          </button>
+          <button onClick={() => setActiveTab('all')} className={`px-3 py-1 rounded text-xs font-semibold uppercase ${activeTab === 'all' ? 'bg-gray-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+            All ({expenses.length})
           </button>
           <div className='relative flex items-center'>
             <input type='text' placeholder='Search here ...' value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className='border border-gray-400 rounded-0 focus:border-blue-500 focus:outline-0 text-gray-500 py-[1.5px] pl-3 pr-5 relative left-[15px] text-xs' />
@@ -446,8 +466,12 @@ export default function ExpenseApproval() {
               </span>
             )}
           </button>
-          <button className='border text-gray-500 hover:bg-gray-500 hover:text-gray-50 text-xs flex items-center space-x-1 py-1 px-3'>
-            <BiRefresh/> Refresh
+          <button 
+            onClick={fetchExpenses}
+            disabled={loading}
+            className='border text-gray-500 hover:bg-gray-500 hover:text-gray-50 text-xs flex items-center space-x-1 py-1 px-3 disabled:opacity-50'
+          >
+            <BiRefresh/> {loading ? 'Loading...' : 'Refresh'}
           </button>
         </div>
         <div className='flex space-x-2'>
@@ -661,14 +685,20 @@ export default function ExpenseApproval() {
             </tr>
           </thead>
           <tbody>
-            {expenses.length === 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan='12' className='text-center py-12'>
+                  <p className='text-gray-600 font-semibold'>Loading expenses...</p>
+                </td>
+              </tr>
+            ) : displayExpenses.length === 0 ? (
               <tr>
                 <td colSpan='12' className='text-center py-12'>
                   <p className='text-gray-600 font-semibold'>No expenses found</p>
                 </td>
               </tr>
             ) : (
-              expenses.map(expense => (
+              displayExpenses.map(expense => (
                 <React.Fragment key={expense.id}>
                   <tr className='border-b border-gray-300'>
                     <td className='text-center py-1 px-2'><input type='checkbox' /></td>

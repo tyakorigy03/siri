@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BsClockHistory, BsCalendar3 } from 'react-icons/bs';
 import { FaMoneyBillWave, FaStore, FaPlus, FaTrash } from 'react-icons/fa';
 import { MdWarning, MdCheckCircle } from 'react-icons/md';
 import { BiChevronDown } from 'react-icons/bi';
+import { useNavigate } from 'react-router-dom';
+import { openBusinessDay, getBusinessDayHistory } from '../../services/businessDay';
+import { getBranches } from '../../services/branches';
+import { showSuccess, showError, handleApiError } from '../../utils/toast';
 
 export default function OpenBusinessDay() {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     branch_id: '',
     opening_float: '',
@@ -16,27 +21,60 @@ export default function OpenBusinessDay() {
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [branches, setBranches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [lastBusinessDay, setLastBusinessDay] = useState(null);
 
-  // Mock data
-  const branches = [
-    { id: 1, name: 'Downtown Store', code: 'DT-001' },
-    { id: 2, name: 'Uptown Branch', code: 'UT-002' },
-    { id: 3, name: 'Mall Outlet', code: 'ML-003' }
-  ];
+  // Load branches and last business day on mount
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        // Load branches
+        const branchesData = await getBranches({ active: true });
+        setBranches(branchesData || []);
+        
+        // Load last business day if branch is selected
+        if (branchesData && branchesData.length > 0) {
+          const branchId = branchesData[0].id;
+          try {
+            const history = await getBusinessDayHistory({ branch_id: branchId, limit: 1 });
+            if (history && history.data && history.data.length > 0) {
+              const lastDay = history.data[0];
+              setLastBusinessDay({
+                date: new Date(lastDay.business_date).toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                }),
+                closing_float: lastDay.actual_closing_cash || 0,
+                total_sales: 0, // Would need to calculate from sales
+                variance: lastDay.variance || 0
+              });
+            }
+          } catch (err) {
+            console.error('Error loading last business day:', err);
+            // Don't show error toast for this as it's not critical
+          }
+        }
 
-  const availableCashiers = [
-    { id: 1, name: 'Mike Johnson', register: 'POS-01' },
-    { id: 2, name: 'Sarah Lee', register: 'POS-02' },
-    { id: 3, name: 'John Doe', register: 'POS-03' },
-    { id: 4, name: 'Emma Davis', register: 'POS-04' }
-  ];
+        // Load available cashiers (employees with cashier role)
+        // Note: This would require an employees API endpoint
+        // For now, set empty array - cashiers can be added manually or fetched when needed
+        setAvailableCashiers([]);
+      } catch (error) {
+        console.error('Error loading data:', error);
+        handleApiError(error, 'Failed to load branches. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadData();
+  }, []);
 
-  const lastBusinessDay = {
-    date: 'Friday, January 03, 2026',
-    closing_float: 485000,
-    total_sales: 18500000,
-    variance: -5000
-  };
+  const [availableCashiers, setAvailableCashiers] = useState([]);
 
   const getCurrentDateTime = () => {
     const now = new Date();
@@ -132,26 +170,25 @@ export default function OpenBusinessDay() {
     setIsSubmitting(true);
     
     try {
-      // const response = await fetch('/api/v1/cashbook/business-day/open', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     branch_id: formData.branch_id,
-      //     opening_float: parseFloat(formData.opening_float),
-      //     notes: formData.notes,
-      //     cashier_floats: formData.distribute_floats ? cashierFloats.map(cf => ({
-      //       cashier_id: cf.cashier_id,
-      //       register: cf.register,
-      //       float_given: parseFloat(cf.float_amount)
-      //     })) : []
-      //   })
-      // });
+      const businessDayData = {
+        branch_id: parseInt(formData.branch_id),
+        opening_float: parseFloat(formData.opening_float),
+        notes: formData.notes || null
+      };
+
+      const result = await openBusinessDay(businessDayData);
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert('Business day opened successfully!');
+      // Note: Cashier float distribution would be handled separately via cash session API
+      // For now, we just open the business day
+      
+      showSuccess('Business day opened successfully!');
+      // Navigate back to dashboard
+      setTimeout(() => {
+        navigate('/dashboard/manager');
+      }, 1500);
       
     } catch (error) {
-      alert('Error opening business day: ' + error.message);
+      handleApiError(error, 'Failed to open business day. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -281,6 +318,17 @@ export default function OpenBusinessDay() {
     );
   }
 
+  if (loading) {
+    return (
+      <div className='p-6 bg-gray-50 min-h-screen flex items-center justify-center'>
+        <div className='text-center'>
+          <div className='w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4'></div>
+          <p className='text-gray-600'>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className='p-6 bg-gray-50 min-h-screen'>
       <div className='max-w-6xl mx-auto'>
@@ -325,7 +373,7 @@ export default function OpenBusinessDay() {
                       <option value=''>-- Choose Branch --</option>
                       {branches.map(branch => (
                         <option key={branch.id} value={branch.id}>
-                          {branch.name} ({branch.code})
+                          {branch.name} {branch.code ? `(${branch.code})` : ''}
                         </option>
                       ))}
                     </select>
@@ -510,35 +558,37 @@ export default function OpenBusinessDay() {
           {/* Right Side - Info Cards */}
           <div className='col-span-1 space-y-6'>
             {/* Last Business Day Info */}
-            <div className='bg-white border border-gray-300 rounded shadow'>
-              <div className='p-3 bg-gray-100 border-b border-gray-300'>
-                <h3 className='font-bold text-xs uppercase'>Last Business Day</h3>
+            {lastBusinessDay && (
+              <div className='bg-white border border-gray-300 rounded shadow'>
+                <div className='p-3 bg-gray-100 border-b border-gray-300'>
+                  <h3 className='font-bold text-xs uppercase'>Last Business Day</h3>
+                </div>
+                <div className='p-4 space-y-3'>
+                  <div>
+                    <p className='text-xs text-gray-600 mb-1'>Date</p>
+                    <p className='text-xs font-semibold'>{lastBusinessDay.date}</p>
+                  </div>
+                  <div className='border-t border-gray-200 pt-3'>
+                    <p className='text-xs text-gray-600 mb-1'>Closing Float</p>
+                    <p className='text-sm font-bold text-green-600'>
+                      {formatCurrency(lastBusinessDay.closing_float)}
+                    </p>
+                  </div>
+                  <div className='border-t border-gray-200 pt-3'>
+                    <p className='text-xs text-gray-600 mb-1'>Total Sales</p>
+                    <p className='text-sm font-bold'>
+                      {formatCurrency(lastBusinessDay.total_sales)}
+                    </p>
+                  </div>
+                  <div className='border-t border-gray-200 pt-3'>
+                    <p className='text-xs text-gray-600 mb-1'>Variance</p>
+                    <p className={`text-sm font-bold ${lastBusinessDay.variance < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {lastBusinessDay.variance < 0 ? '-' : '+'}{formatCurrency(Math.abs(lastBusinessDay.variance))}
+                    </p>
+                  </div>
+                </div>
               </div>
-              <div className='p-4 space-y-3'>
-                <div>
-                  <p className='text-xs text-gray-600 mb-1'>Date</p>
-                  <p className='text-xs font-semibold'>{lastBusinessDay.date}</p>
-                </div>
-                <div className='border-t border-gray-200 pt-3'>
-                  <p className='text-xs text-gray-600 mb-1'>Closing Float</p>
-                  <p className='text-sm font-bold text-green-600'>
-                    {formatCurrency(lastBusinessDay.closing_float)}
-                  </p>
-                </div>
-                <div className='border-t border-gray-200 pt-3'>
-                  <p className='text-xs text-gray-600 mb-1'>Total Sales</p>
-                  <p className='text-sm font-bold'>
-                    {formatCurrency(lastBusinessDay.total_sales)}
-                  </p>
-                </div>
-                <div className='border-t border-gray-200 pt-3'>
-                  <p className='text-xs text-gray-600 mb-1'>Variance</p>
-                  <p className={`text-sm font-bold ${lastBusinessDay.variance < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {lastBusinessDay.variance < 0 ? '-' : '+'}{formatCurrency(Math.abs(lastBusinessDay.variance))}
-                  </p>
-                </div>
-              </div>
-            </div>
+            )}
 
             {/* Tips Card */}
             <div className='bg-blue-50 border border-blue-300 rounded shadow'>

@@ -1,12 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BiChevronUp, BiMoney } from 'react-icons/bi';
-import { FaMoneyBillWave, FaUsers, FaCashRegister, FaExclamationTriangle } from 'react-icons/fa';
-import { MdWarning, MdCheckCircle } from 'react-icons/md';
+import { FaCashRegister, FaExclamationTriangle, FaUsers } from 'react-icons/fa';
 import { BsClockHistory } from 'react-icons/bs';
-import { FaHandHoldingDollar } from 'react-icons/fa6';
-import { FaClock } from 'react-icons/fa';
+import { FaClock, FaFileInvoiceDollar } from 'react-icons/fa';
+import { FaSackDollar } from 'react-icons/fa6';
+import { getCurrentBusinessDay, getCashbookEntries } from '../../services/businessDay';
+import { getSalesSummary } from '../../services/sales';
+import { getCashSessions } from '../../services/cashSessions';
+import { getVATReport } from '../../services/reports';
+import { getExpenses } from '../../services/expenses';
+import { getPurchaseOrders } from '../../services/purchases';
+import { getUserData, getAuthToken } from '../../config/api';
 
 export default function ManagerDashboard() {
+  const navigate = useNavigate();
+
   const [collapsedCards, setCollapsedCards] = useState({
     businessDay: false,
     todaySales: false,
@@ -16,107 +25,340 @@ export default function ManagerDashboard() {
     quickStats: false
   });
 
-  // Mock data (unchanged)
-  const businessDayStatus = {
-    isOpen: true,
-    openedAt: '07:30 AM',
-    openingFloat: 500000,
-    floatsDistributed: 600000,
-    floatInSafe: -100000, // Negative = over-distributed
-    currentCash: 3250000,
-    activeCashiers: 3
-  };
+  const [loading, setLoading] = useState(true);
+  const [businessDayStatus, setBusinessDayStatus] = useState({
+    isOpen: false,
+    openedAt: null,
+    openingFloat: 0,
+    floatsDistributed: 0,
+    floatInSafe: 0,
+    currentCash: 0,
+    activeCashiers: 0
+  });
 
-  const cashSessions = [
-    { 
-      id: 1, 
-      cashier: 'Mike Johnson', 
-      register: 'POS-01', 
-      openedAt: '08:00',
-      floatSource: 'manager',
-      floatApproved: true,
-      sales: 4500000, 
-      transactions: 45, 
-      variance: -5000, 
-      status: 'active' 
-    },
-    { 
-      id: 2, 
-      cashier: 'Sarah Lee', 
-      register: 'POS-02', 
-      openedAt: '14:15',
-      floatSource: 'previous_cashier',
-      floatApproved: false,
-      sales: 1200000, 
-      transactions: 15, 
-      status: 'active' 
-    },
-    { 
-      id: 3, 
-      cashier: 'John Doe', 
-      register: 'POS-03', 
-      openedAt: '08:05',
-      floatSource: 'overnight',
-      floatApproved: false,
-      floatDiscrepancy: -2000,
-      sales: 3800000, 
-      transactions: 32, 
-      status: 'active' 
-    }
-  ];
-
-  const todaySales = {
-    total: 12500000,
-    cash: 4200000,
-    momo: 5000000,
-    card: 2300000,
-    credit: 1000000,
-    transactions: 115,
+  const [cashSessions, setCashSessions] = useState([]);
+  const [todaySales, setTodaySales] = useState({
+    total: 0,
+    cash: 0,
+    momo: 0,
+    card: 0,
+    credit: 0,
+    transactions: 0,
     target: 15000000
-  };
+  });
 
-  const alerts = [
-    { type: 'float_discrepancy', message: 'John Doe (POS-03): -2,000 float discrepancy on overnight handover', severity: 'critical', time: '8:05 AM' },
-    { type: 'unapproved_float', message: '2 cash sessions pending float approval', severity: 'high', time: 'Now' },
-    { type: 'variance', message: 'Mike Johnson (POS-01): -5,000 cash variance detected', severity: 'high', time: '2:15 PM' },
-    { type: 'stock', message: '5 items below reorder point', severity: 'warning', time: '30 min ago' },
-    { type: 'credit', message: 'ABC Corp exceeded credit limit by 200,000', severity: 'warning', time: '1 hour ago' }
-  ];
+  const [alerts, setAlerts] = useState([]);
 
-  const pendingApprovals = [
-    { 
-      type: 'Float Approval', 
-      item: 'John Doe - POS-03 (overnight, -2K discrepancy)', 
-      amount: 148000, 
-      requester: 'Emma Davis',
-      priority: 'critical',
-      time: '8:05 AM' 
-    },
-    { 
-      type: 'Float Approval', 
-      item: 'Sarah Lee - POS-02 (from Mike Johnson)', 
-      amount: 80000, 
-      requester: 'Mike Johnson',
-      priority: 'high',
-      time: '2:15 PM' 
-    },
-    { 
-      type: 'Purchase Order', 
-      item: 'USB Cables - 100 units', 
-      amount: 250000, 
-      requester: 'Sarah Williams', 
-      priority: 'medium',
-      time: '10:00 AM' 
-    },
-    { 
-      type: 'Expense', 
-      item: 'Office Supplies', 
-      amount: 45000, 
-      requester: 'David Brown', 
-      priority: 'low',
-      time: '11:30 AM' 
-    }
-  ];
+  // Load dashboard data
+  useEffect(() => {
+    const loadDashboardData = async () => {
+      try {
+        setLoading(true);
+        
+        // Check if user is authenticated
+        const token = getAuthToken();
+        const user = getUserData();
+        
+        if (!token || !user) {
+          console.warn('No authentication token or user data found');
+          setLoading(false);
+          return;
+        }
+        
+        const branchId = user?.branch_id || null;
+
+        // Load current business day
+        try {
+          const currentDay = await getCurrentBusinessDay(branchId);
+          if (currentDay) {
+            const openedAt = new Date(currentDay.opened_at);
+            setBusinessDayStatus({
+              isOpen: currentDay.status === 'OPEN',
+              openedAt: openedAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+              openingFloat: parseFloat(currentDay.opening_float || 0),
+              floatsDistributed: 0, // Would need to calculate from cash sessions
+              floatInSafe: parseFloat(currentDay.opening_float || 0),
+              currentCash: 0, // Would need to calculate from cashbook
+              activeCashiers: 0 // Would need to count active sessions
+            });
+
+            // Load cashbook entries to calculate current cash
+            try {
+              const entries = await getCashbookEntries({ business_day_id: currentDay.id });
+              if (entries && entries.summary) {
+                setBusinessDayStatus(prev => ({
+                  ...prev,
+                  currentCash: entries.summary.net || 0
+                }));
+              }
+            } catch (err) {
+              console.error('Error loading cashbook:', err);
+              // Don't show error toast - not critical for dashboard
+            }
+          }
+        } catch (err) {
+          console.error('No open business day:', err);
+          setBusinessDayStatus(prev => ({ ...prev, isOpen: false }));
+          // Don't show error toast - it's normal if no business day is open
+        }
+
+        // Load sales summary for today
+        try {
+          const today = new Date().toISOString().split('T')[0];
+          const salesSummary = await getSalesSummary({ 
+            branch_id: branchId,
+            date_from: today,
+            date_to: today 
+          });
+          if (salesSummary) {
+            setTodaySales({
+              total: parseFloat(salesSummary.total_sales || 0),
+              cash: parseFloat(salesSummary.cash_sales || 0),
+              momo: parseFloat(salesSummary.momo_sales || 0),
+              card: parseFloat(salesSummary.card_sales || 0),
+              credit: parseFloat(salesSummary.credit_sales || 0),
+              transactions: parseInt(salesSummary.total_transactions || 0),
+              target: 15000000
+            });
+          }
+        } catch (err) {
+          console.error('Error loading sales summary:', err);
+          // Don't show error toast - dashboard can still function
+        }
+
+        // Load cash sessions
+        let loadedSessions = [];
+        let sessionsData = [];
+        try {
+          const sessions = await getCashSessions({ 
+            branch_id: branchId,
+            status: 'OPEN',
+            limit: 50
+          });
+          sessionsData = Array.isArray(sessions) ? sessions : [];
+          if (sessionsData.length > 0) {
+            loadedSessions = sessionsData.map(session => ({
+              id: session.id,
+              cashier: session.staff_name || session.user_name || 'Unknown',
+              register: session.register || 'N/A',
+              openedAt: new Date(session.opened_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+              floatSource: 'manager', // Would need to determine from session data
+              floatApproved: session.float_approved || false,
+              sales: parseFloat(session.total_cash_in || 0),
+              transactions: parseInt(session.transaction_count || 0),
+              variance: parseFloat(session.variance || 0),
+              status: session.status?.toLowerCase() || 'active',
+              opening_float: parseFloat(session.opening_float || 0)
+            }));
+            setCashSessions(loadedSessions);
+            setBusinessDayStatus(prev => ({
+              ...prev,
+              activeCashiers: loadedSessions.length
+            }));
+          }
+        } catch (err) {
+          console.error('Error loading cash sessions:', err);
+          // Don't show error toast - dashboard can still function
+        }
+
+        // Generate alerts from loaded sessions
+        const generatedAlerts = [];
+        if (loadedSessions.some(s => !s.floatApproved)) {
+          const unapprovedCount = loadedSessions.filter(s => !s.floatApproved).length;
+          generatedAlerts.push({
+            type: 'unapproved_float',
+            message: `${unapprovedCount} cash session${unapprovedCount > 1 ? 's' : ''} pending float approval`,
+            severity: 'high',
+            time: 'Now'
+          });
+        }
+        loadedSessions.forEach(session => {
+          if (session.variance !== 0) {
+            generatedAlerts.push({
+              type: 'variance',
+              message: `${session.cashier} (${session.register}): ${session.variance < 0 ? '-' : '+'}${Math.abs(session.variance).toLocaleString()} cash variance`,
+              severity: Math.abs(session.variance) > 10000 ? 'high' : 'warning',
+              time: 'Recent'
+            });
+          }
+        });
+        setAlerts(generatedAlerts);
+
+        // Update staff snapshot
+        setStaffSnapshot({
+          staffOnShift: 0, // Would need to fetch from employees API
+          cashiersOnShift: loadedSessions.length,
+          sessionsWithVariance: loadedSessions.filter(s => s.variance !== 0).length,
+          commissionToday: 0 // Would need to calculate from commission API
+        });
+
+        // Load tax summary (VAT report)
+        try {
+          const today = new Date().toISOString().split('T')[0];
+          const vatReport = await getVATReport({ 
+            branch_id: branchId,
+            date_from: today,
+            date_to: today 
+          });
+          if (vatReport) {
+            setTaxSummary({
+              periodLabel: 'Today',
+              vatOutput: parseFloat(vatReport.vat_output || 0),
+              vatInput: parseFloat(vatReport.vat_input || 0),
+              whtPayable: parseFloat(vatReport.wht_payable || 0)
+            });
+          }
+        } catch (err) {
+          console.error('Error loading VAT report:', err);
+          // Don't show error toast - not critical for dashboard
+        }
+
+        // Load pending approvals (expenses and purchase orders)
+        const approvals = [];
+        try {
+          // Get expenses with DRAFT status (pending)
+          const expensesResponse = await getExpenses({ 
+            branch_id: branchId,
+            status: 'DRAFT',
+            limit: 10
+          });
+          
+          // Handle different response structures
+          let pendingExpenses = [];
+          if (Array.isArray(expensesResponse)) {
+            pendingExpenses = expensesResponse;
+          } else if (expensesResponse?.data && Array.isArray(expensesResponse.data)) {
+            pendingExpenses = expensesResponse.data;
+          } else if (expensesResponse?.items && Array.isArray(expensesResponse.items)) {
+            pendingExpenses = expensesResponse.items;
+          }
+          
+          // Filter out rejected expenses (those with [REJECTED] in description)
+          pendingExpenses = pendingExpenses.filter(exp => 
+            !exp.description?.includes('[REJECTED]')
+          );
+          
+          if (pendingExpenses && pendingExpenses.length > 0) {
+            pendingExpenses.slice(0, 5).forEach(expense => {
+              approvals.push({
+                type: 'Expense',
+                item: `${expense.category_name || expense.category || 'Expense'} - ${(expense.description || '').substring(0, 50)}`,
+                amount: parseFloat(expense.amount || 0) + parseFloat(expense.vat_amount || 0),
+                requester: expense.requested_by_name || expense.created_by_name || 'Unknown',
+                priority: (parseFloat(expense.amount || 0) + parseFloat(expense.vat_amount || 0)) > 100000 ? 'high' : 'medium',
+                time: new Date(expense.expense_date || expense.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                id: expense.id,
+                approvalType: 'expense'
+              });
+            });
+          }
+        } catch (err) {
+          console.error('Error loading pending expenses:', err);
+          // Don't show error toast - dashboard can still function
+        }
+
+        try {
+          // Get purchase orders with DRAFT or PENDING status
+          const poResponse = await getPurchaseOrders({ 
+            branch_id: branchId,
+            limit: 10
+          });
+          
+          // Handle different response structures
+          let allPOs = [];
+          if (Array.isArray(poResponse)) {
+            allPOs = poResponse;
+          } else if (poResponse?.data && Array.isArray(poResponse.data)) {
+            allPOs = poResponse.data;
+          } else if (poResponse?.items && Array.isArray(poResponse.items)) {
+            allPOs = poResponse.items;
+          }
+          
+          // Filter for pending orders (DRAFT or PENDING status, not CANCELLED)
+          const pendingPOs = allPOs.filter(po => 
+            (po.status === 'DRAFT' || po.status === 'PENDING') && 
+            po.status !== 'CANCELLED' &&
+            !po.notes?.includes('[REJECTED]')
+          );
+          
+          if (pendingPOs && pendingPOs.length > 0) {
+            pendingPOs.slice(0, 5).forEach(po => {
+              const totalAmount = parseFloat(po.total_amount || 0);
+              approvals.push({
+                type: 'Purchase Order',
+                item: `PO ${po.order_number || po.id} - ${po.supplier_name || 'Supplier'}`,
+                amount: totalAmount,
+                requester: po.created_by_name || 'Unknown',
+                priority: totalAmount > 500000 ? 'high' : 'medium',
+                time: new Date(po.order_date || po.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                id: po.id,
+                approvalType: 'purchase_order'
+              });
+            });
+          }
+        } catch (err) {
+          console.error('Error loading pending purchase orders:', err);
+          // Don't show error toast - dashboard can still function
+        }
+
+        // Add unapproved float sessions to approvals
+        loadedSessions.filter(s => !s.floatApproved).forEach(session => {
+          const sessionData = sessionsData.find(s => s.id === session.id);
+          approvals.push({
+            type: 'Float Approval',
+            item: `${session.cashier} - ${session.register}`,
+            amount: parseFloat(sessionData?.opening_float || 0),
+            requester: session.cashier,
+            priority: 'high',
+            time: session.openedAt,
+            id: session.id,
+            approvalType: 'float'
+          });
+        });
+
+        setPendingApprovals(approvals);
+
+        // Refund summary - would need refunds API
+        setRefundSummary({
+          countToday: 0,
+          amountToday: 0,
+          monthToDate: 0
+        });
+
+      } catch (error) {
+        console.error('Error loading dashboard:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadDashboardData();
+    // Refresh every 30 seconds
+    const interval = setInterval(loadDashboardData, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const [taxSummary, setTaxSummary] = useState({
+    periodLabel: 'Today',
+    vatOutput: 0,
+    vatInput: 0,
+    whtPayable: 0
+  });
+
+  const [refundSummary, setRefundSummary] = useState({
+    countToday: 0,
+    amountToday: 0,
+    monthToDate: 0
+  });
+
+  const [staffSnapshot, setStaffSnapshot] = useState({
+    staffOnShift: 0,
+    cashiersOnShift: 0,
+    sessionsWithVariance: 0,
+    commissionToday: 0
+  });
+
+  const [pendingApprovals, setPendingApprovals] = useState([]);
 
   const toggleCard = (cardName) => {
     setCollapsedCards(prev => ({
@@ -145,6 +387,17 @@ export default function ManagerDashboard() {
     };
     return colors[priority] || colors.medium;
   };
+
+  if (loading) {
+    return (
+      <div className='p-6 bg-gray-50 min-h-screen flex items-center justify-center'>
+        <div className='text-center'>
+          <div className='w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4'></div>
+          <p className='text-gray-600'>Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className='p-3 md:p-4 lg:p-6 space-y-4 md:space-y-6 bg-gray-50 min-h-screen'>
@@ -211,7 +464,10 @@ export default function ManagerDashboard() {
                         </p>
                       </div>
                     </div>
-                    <button className={`${businessDayStatus.isOpen ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded text-xs font-bold uppercase w-full sm:w-auto`}>
+                    <button 
+                      onClick={() => navigate(businessDayStatus.isOpen ? 'close-business-day' : 'open-business-day')}
+                      className={`${businessDayStatus.isOpen ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded text-xs font-bold uppercase w-full sm:w-auto`}
+                    >
                       {businessDayStatus.isOpen ? 'Close Day' : 'Open Day'}
                     </button>
                   </div>
@@ -356,13 +612,21 @@ export default function ManagerDashboard() {
                   </span>
                 )}
               </div>
-              <button 
-                onClick={() => toggleCard('cashSessions')}
-                className="transition-transform duration-300 flex-shrink-0"
-                style={{ transform: collapsedCards.cashSessions ? 'rotate(180deg)' : 'rotate(0deg)' }}
-              >
-                <BiChevronUp size={20} className="sm:w-6 sm:h-6"/>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigate('cash-session-management')}
+                  className="hidden sm:inline-flex text-[10px] sm:text-xs border border-gray-400 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                >
+                  Manage Sessions
+                </button>
+                <button 
+                  onClick={() => toggleCard('cashSessions')}
+                  className="transition-transform duration-300 flex-shrink-0"
+                  style={{ transform: collapsedCards.cashSessions ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                >
+                  <BiChevronUp size={20} className="sm:w-6 sm:h-6"/>
+                </button>
+              </div>
             </div>
             <div className="bg-gray-200 h-1 sm:h-2"></div>
             
@@ -378,11 +642,6 @@ export default function ManagerDashboard() {
                         {!session.floatApproved && (
                           <span className='text-xs bg-orange-100 text-orange-700 border border-orange-400 px-1.5 sm:px-2 py-0.5 rounded font-semibold flex items-center gap-1 flex-shrink-0'>
                             <FaClock size={10} /> Needs Approval
-                          </span>
-                        )}
-                        {session.floatDiscrepancy && (
-                          <span className='text-xs bg-red-100 text-red-700 border border-red-400 px-1.5 sm:px-2 py-0.5 rounded font-semibold flex-shrink-0'>
-                            🚨 Discrepancy
                           </span>
                         )}
                       </div>
@@ -423,6 +682,150 @@ export default function ManagerDashboard() {
               </div>
             </div>
           </div>
+             {/* Backoffice Snapshot: taxes, refunds, staff */}
+             <div className="bg-white border border-gray-300 rounded shadow">
+            <div className="p-3 sm:p-4 flex justify-between items-center">
+              <h2 className='font-bold text-xs sm:text-sm'>BACKOFFICE SNAPSHOT</h2>
+              <button 
+                onClick={() => toggleCard('quickStats')}
+                className="transition-transform duration-300 flex-shrink-0"
+                style={{ transform: collapsedCards.quickStats ? 'rotate(180deg)' : 'rotate(0deg)' }}
+              >
+                <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
+              </button>
+            </div>
+            <div className="bg-gray-200 h-1 sm:h-2"></div>
+            
+            <div className={`overflow-hidden transition-all duration-300 ${collapsedCards.quickStats ? 'max-h-0' : 'max-h-[520px]'}`}>
+              <div className="p-3 sm:p-4 space-y-3">
+                {/* Taxes */}
+                <div className="bg-gray-50 border border-gray-200 rounded p-2 sm:p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FaFileInvoiceDollar className="text-blue-600 flex-shrink-0" size={14} />
+                      <p className="font-semibold text-xs sm:text-sm truncate">Taxes (VAT & WHT) – {taxSummary.periodLabel}</p>
+                    </div>
+                    <button
+                      onClick={() => navigate('daily-report')}
+                      className="hidden sm:inline-flex text-[10px] sm:text-xs text-blue-600 hover:underline"
+                    >
+                      View report
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] sm:text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">VAT Output (Sales)</span>
+                      <span className="font-bold text-green-700 truncate">{formatCurrency(taxSummary.vatOutput)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">VAT Input (Purchases)</span>
+                      <span className="font-bold text-purple-700 truncate">{formatCurrency(taxSummary.vatInput)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">WHT to remit</span>
+                      <span className="font-bold text-orange-700 truncate">{formatCurrency(taxSummary.whtPayable)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Net VAT Position</span>
+                      <span className="font-bold text-blue-700 truncate">
+                        {formatCurrency(taxSummary.vatOutput - taxSummary.vatInput)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Refunds & Exceptions */}
+                <div className="bg-gray-50 border border-gray-200 rounded p-2 sm:p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FaSackDollar className="text-orange-600 flex-shrink-0" size={14} />
+                      <p className="font-semibold text-xs sm:text-sm truncate">Refunds & Exceptions</p>
+                    </div>
+                    <button
+                      onClick={() => navigate('variance-investigation')}
+                      className="hidden sm:inline-flex text-[10px] sm:text-xs text-orange-700 hover:underline"
+                    >
+                      Investigate
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] sm:text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Refunds today</span>
+                      <span className="font-bold text-gray-800 truncate">{refundSummary.countToday}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Refund value today</span>
+                      <span className="font-bold text-red-600 truncate">{formatCurrency(refundSummary.amountToday)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Month-to-date refunds</span>
+                      <span className="font-bold text-gray-800 truncate">{formatCurrency(refundSummary.monthToDate)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Cash / tax impact</span>
+                      <span className="font-semibold text-gray-700 truncate">Tracked in cashbook & VAT</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Staff & Payroll Inputs */}
+                <div className="bg-gray-50 border border-gray-200 rounded p-2 sm:p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FaUsers className="text-green-600 flex-shrink-0" size={14} />
+                      <p className="font-semibold text-xs sm:text-sm truncate">Staff & Commissions (Today)</p>
+                    </div>
+                    <button
+                      onClick={() => navigate('staff-performance')}
+                      className="hidden sm:inline-flex text-[10px] sm:text-xs text-green-700 hover:underline"
+                    >
+                      Staff view
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[10px] sm:text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Staff on shift</span>
+                      <span className="font-bold text-gray-800 truncate">{staffSnapshot.staffOnShift}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Active cashiers</span>
+                      <span className="font-bold text-gray-800 truncate">{staffSnapshot.cashiersOnShift}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Sessions with variance</span>
+                      <span className="font-bold text-orange-700 truncate">{staffSnapshot.sessionsWithVariance}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate">Commission today</span>
+                      <span className="font-bold text-green-700 truncate">{formatCurrency(staffSnapshot.commissionToday)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Cash quick stats (float & current cash) */}
+                <div className='border-t border-gray-200 pt-2 mt-1 space-y-1 text-[10px] sm:text-xs'>
+                  <div className='flex justify-between items-center'>
+                    <span className='text-gray-600 truncate'>Opening Float</span>
+                    <span className='font-bold truncate'>{formatCurrency(businessDayStatus.openingFloat)}</span>
+                  </div>
+                  <div className='flex justify-between items-center'>
+                    <span className='text-gray-600 truncate'>Distributed</span>
+                    <span className='font-bold truncate'>{formatCurrency(businessDayStatus.floatsDistributed)}</span>
+                  </div>
+                  <div className='flex justify-between items-center'>
+                    <span className='text-gray-600 truncate'>In Safe</span>
+                    <span className={`font-bold truncate ${businessDayStatus.floatInSafe < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {formatCurrency(businessDayStatus.floatInSafe)}
+                    </span>
+                  </div>
+                  <div className='flex justify-between items-center'>
+                    <span className='text-gray-600 truncate'>Current Cash</span>
+                    <span className='font-bold text-green-600 truncate'>{formatCurrency(businessDayStatus.currentCash)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* RIGHT SIDE - 4 cols on large, full width on smaller */}
@@ -435,13 +838,21 @@ export default function ManagerDashboard() {
                 <h2 className='font-bold text-xs sm:text-sm truncate'>ALERTS & WARNINGS</h2>
                 <span className='bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0'>{alerts.length}</span>
               </div>
-              <button 
-                onClick={() => toggleCard('alerts')}
-                className="transition-transform duration-300 flex-shrink-0"
-                style={{ transform: collapsedCards.alerts ? 'rotate(180deg)' : 'rotate(0deg)' }}
-              >
-                <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigate('notifications')}
+                  className="hidden sm:inline-flex text-[10px] sm:text-xs border border-gray-400 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                >
+                  Open Center
+                </button>
+                <button 
+                  onClick={() => toggleCard('alerts')}
+                  className="transition-transform duration-300 flex-shrink-0"
+                  style={{ transform: collapsedCards.alerts ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                >
+                  <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
+                </button>
+              </div>
             </div>
             <div className="bg-gray-200 h-1 sm:h-2"></div>
             
@@ -477,13 +888,21 @@ export default function ManagerDashboard() {
                 <h2 className='font-bold text-xs sm:text-sm truncate'>PENDING APPROVALS</h2>
                 <span className='bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0'>{pendingApprovals.length}</span>
               </div>
-              <button 
-                onClick={() => toggleCard('pendingApprovals')}
-                className="transition-transform duration-300 flex-shrink-0"
-                style={{ transform: collapsedCards.pendingApprovals ? 'rotate(180deg)' : 'rotate(0deg)' }}
-              >
-                <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigate('expense-approval')}
+                  className="hidden sm:inline-flex text-[10px] sm:text-xs border border-gray-400 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                >
+                  View Queue
+                </button>
+                <button 
+                  onClick={() => toggleCard('pendingApprovals')}
+                  className="transition-transform duration-300 flex-shrink-0"
+                  style={{ transform: collapsedCards.pendingApprovals ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                >
+                  <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
+                </button>
+              </div>
             </div>
             <div className="bg-gray-200 h-1 sm:h-2"></div>
             
@@ -518,47 +937,7 @@ export default function ManagerDashboard() {
             </div>
           </div>
 
-          {/* Quick Stats */}
-          <div className="bg-white border border-gray-300 rounded shadow">
-            <div className="p-3 sm:p-4 flex justify-between items-center">
-              <h2 className='font-bold text-xs sm:text-sm'>QUICK STATS</h2>
-              <button 
-                onClick={() => toggleCard('quickStats')}
-                className="transition-transform duration-300 flex-shrink-0"
-                style={{ transform: collapsedCards.quickStats ? 'rotate(180deg)' : 'rotate(0deg)' }}
-              >
-                <BiChevronUp size={18} className="sm:w-5 sm:h-5"/>
-              </button>
-            </div>
-            <div className="bg-gray-200 h-1 sm:h-2"></div>
-            
-            <div className={`overflow-hidden transition-all duration-300 ${collapsedCards.quickStats ? 'max-h-0' : 'max-h-[500px]'}`}>
-              <div className="p-3 sm:p-4 space-y-1 sm:space-y-2">
-                <div className='flex justify-between items-center py-1.5 sm:py-2 border-b border-gray-200 text-xs'>
-                  <span className='text-gray-600 truncate'>Opening Float</span>
-                  <span className='font-bold truncate'>{formatCurrency(businessDayStatus.openingFloat)}</span>
-                </div>
-                <div className='flex justify-between items-center py-1.5 sm:py-2 border-b border-gray-200 text-xs'>
-                  <span className='text-gray-600 truncate'>Distributed</span>
-                  <span className='font-bold truncate'>{formatCurrency(businessDayStatus.floatsDistributed)}</span>
-                </div>
-                <div className='flex justify-between items-center py-1.5 sm:py-2 border-b border-gray-200 text-xs'>
-                  <span className='text-gray-600 truncate'>In Safe</span>
-                  <span className={`font-bold truncate ${businessDayStatus.floatInSafe < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {formatCurrency(businessDayStatus.floatInSafe)}
-                  </span>
-                </div>
-                <div className='flex justify-between items-center py-1.5 sm:py-2 border-b border-gray-200 text-xs'>
-                  <span className='text-gray-600 truncate'>Current Cash</span>
-                  <span className='font-bold text-green-600 truncate'>{formatCurrency(businessDayStatus.currentCash)}</span>
-                </div>
-                <div className='flex justify-between items-center py-1.5 sm:py-2 text-xs'>
-                  <span className='text-gray-600 truncate'>Active Staff</span>
-                  <span className='font-bold truncate'>{businessDayStatus.activeCashiers} cashiers</span>
-                </div>
-              </div>
-            </div>
-          </div>
+       
         </div>
       </div>
     </div>

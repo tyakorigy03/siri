@@ -13,6 +13,9 @@ const cashbookRoutes = require('./cashbook.routes');
 const expenseRoutes = require('./expense.routes');
 const purchaseRoutes = require('./purchase.routes');
 const invoiceRoutes = require('./invoice.routes');
+const staffSessionRoutes = require('./staffSession.routes');
+const branchRoutes = require('./branch.routes');
+const employeeRoutes = require('./employee.routes');
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -25,6 +28,9 @@ router.use('/cashbook', cashbookRoutes);
 router.use('/expenses', expenseRoutes);
 router.use('/purchases', purchaseRoutes);
 router.use('/invoices', invoiceRoutes);
+router.use('/staff-sessions', staffSessionRoutes);
+router.use('/branches', branchRoutes);
+router.use('/employees', employeeRoutes);
 
 // API info route
 router.get('/', (req, res) => {

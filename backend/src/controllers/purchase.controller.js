@@ -40,13 +40,15 @@ exports.getPurchaseOrders = async (req, res) => {
       params.push(status);
     }
 
-    // Get total
+    // Get total count - build count query from the base query
     const countQuery = query.replace(
-      'SELECT po.*, s.name as supplier_name, w.name as warehouse_name, u1.name as created_by_name, u2.name as approved_by_name',
-      'SELECT COUNT(*) as total'
+      /SELECT[\s\S]*?FROM/,
+      'SELECT COUNT(*) as total FROM'
     );
-    const [countResult] = await db.query(countQuery, params);
-    const total = countResult[0].total;
+    // Remove ORDER BY and LIMIT from count query
+    const cleanCountQuery = countQuery.split('ORDER BY')[0];
+    const [countResult] = await db.query(cleanCountQuery, params);
+    const total = countResult && countResult[0] ? countResult[0].total : 0;
 
     query += ' ORDER BY po.created_at DESC LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
@@ -225,6 +227,48 @@ exports.approvePurchaseOrder = async (req, res) => {
   } catch (error) {
     console.error('Approve purchase order error:', error);
     return errorResponse(res, 500, 'Error approving purchase order', error);
+  }
+};
+
+/**
+ * @desc    Reject purchase order
+ * @route   PUT /api/v1/purchases/orders/:id/reject
+ * @access  Private (manager, owner)
+ */
+exports.rejectPurchaseOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejection_reason } = req.body;
+
+    if (!rejection_reason || rejection_reason.trim() === '') {
+      return badRequestResponse(res, 'Rejection reason is required');
+    }
+
+    const [orders] = await db.query('SELECT * FROM purchase_orders WHERE id = ?', [id]);
+    
+    if (orders.length === 0) {
+      return notFoundResponse(res, 'Purchase order not found');
+    }
+
+    if (orders[0].status === 'APPROVED' || orders[0].status === 'RECEIVED') {
+      return badRequestResponse(res, 'Cannot reject an already approved or received order');
+    }
+
+    // Update notes to include rejection reason
+    const updatedNotes = orders[0].notes 
+      ? `${orders[0].notes}\n\n[REJECTED] Reason: ${rejection_reason}`
+      : `[REJECTED] Reason: ${rejection_reason}`;
+
+    await db.query(
+      'UPDATE purchase_orders SET status = "CANCELLED", notes = ?, approved_by = NULL WHERE id = ?',
+      [updatedNotes, id]
+    );
+
+    return successResponse(res, 200, 'Purchase order rejected successfully');
+
+  } catch (error) {
+    console.error('Reject purchase order error:', error);
+    return errorResponse(res, 500, 'Error rejecting purchase order', error);
   }
 };
 
@@ -566,6 +610,82 @@ exports.getAccountsPayable = async (req, res) => {
   } catch (error) {
     console.error('Get accounts payable error:', error);
     return errorResponse(res, 500, 'Error retrieving accounts payable', error);
+  }
+};
+
+/**
+ * @desc    Get suppliers list
+ * @route   GET /api/v1/purchases/suppliers
+ * @access  Private
+ */
+exports.getSuppliers = async (req, res) => {
+  try {
+    const { business_id, active } = req.query;
+    
+    let query = 'SELECT * FROM suppliers WHERE 1=1';
+    const params = [];
+    
+    if (business_id) {
+      query += ' AND business_id = ?';
+      params.push(business_id);
+    }
+    
+    if (active !== undefined) {
+      query += ' AND active = ?';
+      params.push(active === 'true' || active === true ? 1 : 0);
+    }
+    
+    query += ' ORDER BY name ASC';
+    
+    const [suppliers] = await db.query(query, params);
+    
+    return successResponse(res, 200, 'Suppliers retrieved successfully', suppliers);
+  } catch (error) {
+    console.error('Get suppliers error:', error);
+    return errorResponse(res, 500, 'Error retrieving suppliers', error);
+  }
+};
+
+/**
+ * @desc    Get warehouses list
+ * @route   GET /api/v1/purchases/warehouses
+ * @access  Private
+ */
+exports.getWarehouses = async (req, res) => {
+  try {
+    const { business_id, branch_id, active } = req.query;
+    
+    let query = `
+      SELECT w.*, b.name as branch_name
+      FROM warehouses w
+      INNER JOIN branches b ON w.branch_id = b.id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (business_id) {
+      query += ' AND w.business_id = ?';
+      params.push(business_id);
+    }
+    
+    if (branch_id) {
+      query += ' AND w.branch_id = ?';
+      params.push(branch_id);
+    }
+    
+    if (active !== undefined) {
+      query += ' AND w.active = ?';
+      params.push(active === 'true' || active === true ? 1 : 0);
+    }
+    
+    query += ' ORDER BY w.name ASC';
+    
+    const [warehouses] = await db.query(query, params);
+    
+    return successResponse(res, 200, 'Warehouses retrieved successfully', warehouses);
+  } catch (error) {
+    console.error('Get warehouses error:', error);
+    return errorResponse(res, 500, 'Error retrieving warehouses', error);
   }
 };
 

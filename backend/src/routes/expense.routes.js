@@ -37,6 +37,12 @@ router.put(
 );
 
 router.put(
+  '/:id/reject',
+  authorize('manager', 'owner'),
+  expenseController.rejectExpense
+);
+
+router.put(
   '/:id/pay',
   authorize('accountant', 'manager', 'owner'),
   expenseController.markExpenseAsPaid

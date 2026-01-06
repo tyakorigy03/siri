@@ -18,12 +18,18 @@ exports.getExpenses = async (req, res) => {
         e.*,
         ec.name as category_name,
         b.name as branch_name,
-        u1.name as requested_by_name,
-        u2.name as approved_by_name
+        u2.name as approved_by_name,
+        CASE 
+          WHEN e.description LIKE '%[REJECTED]%' THEN 'REJECTED'
+          WHEN e.status = 'DRAFT' THEN 'pending'
+          WHEN e.status = 'APPROVED' THEN 'approved'
+          WHEN e.status = 'PAID' THEN 'paid'
+          ELSE e.status
+        END as display_status,
+        0 as has_receipt
       FROM expenses e
       INNER JOIN expense_categories ec ON e.category_id = ec.id
       INNER JOIN branches b ON e.branch_id = b.id
-      LEFT JOIN users u1 ON e.requested_by = u1.id
       LEFT JOIN users u2 ON e.approved_by = u2.id
       WHERE 1=1
     `;
@@ -40,8 +46,16 @@ exports.getExpenses = async (req, res) => {
     }
 
     if (status) {
-      query += ' AND e.status = ?';
-      params.push(status);
+      if (status === 'REJECTED') {
+        query += ' AND e.description LIKE ?';
+        params.push('%[REJECTED]%');
+      } else if (status === 'pending') {
+        query += ' AND e.status = "DRAFT" AND e.description NOT LIKE ?';
+        params.push('%[REJECTED]%');
+      } else {
+        query += ' AND e.status = ? AND e.description NOT LIKE ?';
+        params.push(status, '%[REJECTED]%');
+      }
     }
 
     if (date_from) {
@@ -54,13 +68,15 @@ exports.getExpenses = async (req, res) => {
       params.push(date_to);
     }
 
-    // Get total
+    // Get total count - build count query from the base query
     const countQuery = query.replace(
-      'SELECT e.*, ec.name as category_name, b.name as branch_name, u1.name as requested_by_name, u2.name as approved_by_name',
-      'SELECT COUNT(*) as total'
+      /SELECT[\s\S]*?FROM/,
+      'SELECT COUNT(*) as total FROM'
     );
-    const [countResult] = await db.query(countQuery, params);
-    const total = countResult[0].total;
+    // Remove ORDER BY and LIMIT from count query
+    const cleanCountQuery = countQuery.split('ORDER BY')[0];
+    const [countResult] = await db.query(cleanCountQuery, params);
+    const total = countResult && countResult[0] ? countResult[0].total : 0;
 
     query += ' ORDER BY e.expense_date DESC, e.created_at DESC LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));
@@ -89,12 +105,18 @@ exports.getExpense = async (req, res) => {
         e.*,
         ec.name as category_name,
         b.name as branch_name,
-        u1.name as requested_by_name,
-        u2.name as approved_by_name
+        u2.name as approved_by_name,
+        CASE 
+          WHEN e.description LIKE '%[REJECTED]%' THEN 'REJECTED'
+          WHEN e.status = 'DRAFT' THEN 'pending'
+          WHEN e.status = 'APPROVED' THEN 'approved'
+          WHEN e.status = 'PAID' THEN 'paid'
+          ELSE e.status
+        END as display_status,
+        0 as has_receipt
       FROM expenses e
       INNER JOIN expense_categories ec ON e.category_id = ec.id
       INNER JOIN branches b ON e.branch_id = b.id
-      LEFT JOIN users u1 ON e.requested_by = u1.id
       LEFT JOIN users u2 ON e.approved_by = u2.id
       WHERE e.id = ?
     `, [id]);
@@ -142,12 +164,14 @@ exports.createExpense = async (req, res) => {
 
     const expenseId = generateId('EXP', Date.now());
     
+    // Note: receipt_url and requested_by fields may need to be added to the expenses table schema
+    // For now, we'll only insert fields that exist in the schema
     await connection.query(`
       INSERT INTO expenses (
         id, business_id, branch_id, category_id, expense_date,
         amount, vat_amount, payment_method, payee, description,
-        receipt_url, status, requested_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, NOW())
+        status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', NOW())
     `, [
       expenseId,
       business_id,
@@ -158,9 +182,7 @@ exports.createExpense = async (req, res) => {
       vat_amount || 0,
       payment_method,
       payee,
-      description || null,
-      receipt_url,
-      req.user.id
+      description || null
     ]);
 
     // Create cashbook entry if paid
@@ -197,6 +219,7 @@ exports.createExpense = async (req, res) => {
 exports.approveExpense = async (req, res) => {
   try {
     const { id } = req.params;
+    const { notes } = req.body;
 
     const [expenses] = await db.query('SELECT * FROM expenses WHERE id = ?', [id]);
     
@@ -206,6 +229,10 @@ exports.approveExpense = async (req, res) => {
 
     if (expenses[0].status === 'APPROVED') {
       return badRequestResponse(res, 'Expense already approved');
+    }
+
+    if (expenses[0].status === 'PAID') {
+      return badRequestResponse(res, 'Cannot approve an already paid expense');
     }
 
     await db.query(
@@ -218,6 +245,49 @@ exports.approveExpense = async (req, res) => {
   } catch (error) {
     console.error('Approve expense error:', error);
     return errorResponse(res, 500, 'Error approving expense', error);
+  }
+};
+
+/**
+ * @desc    Reject expense
+ * @route   PUT /api/v1/expenses/:id/reject
+ * @access  Private (manager, owner)
+ */
+exports.rejectExpense = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejection_reason } = req.body;
+
+    if (!rejection_reason || rejection_reason.trim() === '') {
+      return badRequestResponse(res, 'Rejection reason is required');
+    }
+
+    const [expenses] = await db.query('SELECT * FROM expenses WHERE id = ?', [id]);
+    
+    if (expenses.length === 0) {
+      return notFoundResponse(res, 'Expense not found');
+    }
+
+    if (expenses[0].status === 'PAID') {
+      return badRequestResponse(res, 'Cannot reject an already paid expense');
+    }
+
+    // Update description to include rejection reason, or we can add a rejection_reason field
+    // For now, we'll append to description and set status back to DRAFT
+    const updatedDescription = expenses[0].description 
+      ? `${expenses[0].description}\n\n[REJECTED] Reason: ${rejection_reason}`
+      : `[REJECTED] Reason: ${rejection_reason}`;
+
+    await db.query(
+      'UPDATE expenses SET status = "DRAFT", description = ?, approved_by = NULL WHERE id = ?',
+      [updatedDescription, id]
+    );
+
+    return successResponse(res, 200, 'Expense rejected successfully');
+
+  } catch (error) {
+    console.error('Reject expense error:', error);
+    return errorResponse(res, 500, 'Error rejecting expense', error);
   }
 };
 

@@ -6,6 +6,8 @@ import { BsClockHistory } from 'react-icons/bs';
 import { FiFilter } from 'react-icons/fi';
 import { FaPrint } from 'react-icons/fa6';
 import { LuSquareArrowDownRight } from 'react-icons/lu';
+import { showSuccess, handleApiError } from '../../utils/toast';
+import { closeBusinessDay } from '../../services/businessDay';
 
 export default function CloseBusinessDay() {
   const [expandedSessions, setExpandedSessions] = useState([]);
@@ -136,10 +138,18 @@ export default function CloseBusinessDay() {
   const confirmCloseDay = async () => {
     setIsSubmitting(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert('Business day closed successfully!');
+      // TODO: Get business_day_id from current business day
+      const businessDayData = {
+        business_day_id: '', // Should be fetched from current business day
+        actual_closing_cash: parseFloat(finalCashCount),
+        notes: closingNotes || null
+      };
+      
+      await closeBusinessDay(businessDayData);
+      showSuccess('Business day closed successfully!');
+      // TODO: Navigate back to dashboard after closing
     } catch (error) {
-      alert('Error closing business day: ' + error.message);
+      handleApiError(error, 'Failed to close business day. Please try again.');
     } finally {
       setIsSubmitting(false);
     }

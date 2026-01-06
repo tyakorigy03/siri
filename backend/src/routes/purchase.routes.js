@@ -9,6 +9,10 @@ const { validate, schemas } = require('../middlewares/validate');
 // All routes require authentication
 router.use(protect);
 
+// Suppliers and Warehouses
+router.get('/suppliers', purchaseController.getSuppliers);
+router.get('/warehouses', purchaseController.getWarehouses);
+
 // Purchase Orders
 router.get('/orders', purchaseController.getPurchaseOrders);
 router.get('/orders/:id', purchaseController.getPurchaseOrder);
@@ -24,6 +28,12 @@ router.put(
   '/orders/:id/approve',
   authorize('manager', 'owner'),
   purchaseController.approvePurchaseOrder
+);
+
+router.put(
+  '/orders/:id/reject',
+  authorize('manager', 'owner'),
+  purchaseController.rejectPurchaseOrder
 );
 
 // Purchase Invoices

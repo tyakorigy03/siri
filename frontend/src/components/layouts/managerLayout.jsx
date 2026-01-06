@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { BiChevronDown, BiMenu } from 'react-icons/bi';
-import { MdDashboard, MdSettings } from 'react-icons/md';
+import { MdDashboard, MdSettings, MdOutlinePeopleAlt } from 'react-icons/md';
 import { GrDocument } from 'react-icons/gr';
 import { FaShoppingCart } from 'react-icons/fa';
 import { FaGears, FaSackDollar } from 'react-icons/fa6';
@@ -15,12 +15,20 @@ export default function ManagerLayout() {
   const sidebarItems = [
     { icon: <MdDashboard />, label: 'Dashboard', path: '' },
     { icon: <GrDocument />, label: 'Invoices', path: 'invoices' },
-    { icon: <FaShoppingCart />, label: 'Sales' },
-    { icon: <TbUserDollar />, label: 'Accounts Receivable' },
-    { icon: <FaSackDollar />, label: 'Accounts Payable' },
+    { icon: <FaShoppingCart />, label: 'Sales', path: 'sale-management' },
+    // Link AR & AP to their dedicated management views
+    { icon: <TbUserDollar />, label: 'Accounts Receivable', path: 'customer-credit-management' },
+    { icon: <FaSackDollar />, label: 'Accounts Payable', path: 'accounts-payable' },
     { icon: <FaGears />, label: 'Inventory Management', path: 'inventory-oversight' },
+    { icon: <MdOutlinePeopleAlt />, label: 'Staff & Payroll', path: 'staff-center' },
     { icon: <GrDocument />, label: 'Reports', path: 'daily-report' },
     { icon: <MdSettings />, label: 'Settings', path: 'manager-settings' },
+  ];
+
+  const approvalItems = [
+    { label: 'Expense Approval', path: 'expense-approval' },
+    { label: 'Purchase Order Approval', path: 'purchase-order-approval' },
+    { label: 'Float Cash Approval', path: 'float-cash-approval' },
   ];
 
   return (
@@ -46,8 +54,11 @@ export default function ManagerLayout() {
           <button className='flex text-xs sm:text-sm md:text-sm text-gray-500 cursor-pointer hover:bg-gray-500 hover:text-gray-50 space-x-2 md:space-x-3 bg-white px-2 py-1 border uppercase'>
             Invoices +
           </button>
-          <button className='flex text-xs sm:text-sm md:text-sm text-gray-500 cursor-pointer hover:bg-gray-500 hover:text-gray-50 space-x-2 md:space-x-3 bg-white px-2 py-1 border uppercase'>
-            Proformas +
+          <button onClick={() => navigate('pos-point-of-sales')} className='flex text-xs sm:text-sm md:text-sm text-gray-500 cursor-pointer hover:bg-gray-500 hover:text-gray-50 space-x-2 md:space-x-3 bg-white px-2 py-1 border uppercase'>
+            POS (Point of Sales) +
+          </button>
+          <button onClick={() => navigate('create-expense')} className='flex text-xs sm:text-sm md:text-sm text-gray-500 cursor-pointer hover:bg-gray-500 hover:text-gray-50 space-x-2 md:space-x-3 bg-white px-2 py-1 border uppercase'>
+            Expense +
           </button>
           <Link
             to='open-business-day'
@@ -55,6 +66,22 @@ export default function ManagerLayout() {
           >
             New Day +
           </Link>
+          <div className='relative group'>
+            <button className='flex text-xs sm:text-sm md:text-sm cursor-pointer bg-blue-500 hover:bg-blue-600 text-white space-x-2 md:space-x-3 px-2 py-1 border uppercase'>
+              Approvals <BiChevronDown size={15} />
+            </button>
+            <div className='absolute left-0 mt-1 w-48 bg-white border border-gray-300 rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50'>
+              {approvalItems.map((item, idx) => (
+                <Link
+                  key={idx}
+                  to={item.path}
+                  className='block px-4 py-2 text-xs text-gray-700 hover:bg-gray-100 border-b border-gray-200 last:border-b-0'
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className='flex flex-wrap items-center space-x-1 mt-2 md:mt-0'>
